@@ -1,0 +1,21 @@
+{
+  "name": "rhw-blaze-mapper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Gap analysis tool between Rules Harvesting Workbooks and Blaze Advisor codebases",
+  "workspaces": [
+    "packages/frontend",
+    "packages/backend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w packages/backend\" \"npm run dev -w packages/frontend\"",
+    "build": "npm run build -w packages/backend && npm run build -w packages/frontend",
+    "install:all": "npm install"
+  },
+  "devDependencies": {
+    "concurrently": "9.1.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
