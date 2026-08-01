@@ -44,7 +44,7 @@ import {
 } from '../services/gapAnalyzer';
 
 import { runKiro } from '../services/kiroRunner';
-import { runKiroVerification } from '../services/kiroVerifier';
+import { runKiroVerification, KiroForwardItem, KiroReverseItem } from '../services/kiroVerifier';
 import { generateExcelIndex } from '../services/excelIndexer';
 
 import {
@@ -455,14 +455,71 @@ analysisRouter.post('/run_analysis_stream', async (req: Request, res: Response) 
     });
 
     // Use Kiro-updated results if verification ran successfully
-    const finalGaps = kiroResult.skipped ? gaps : kiroResult.forward;
-    // When Kiro ran: reverse is already UndocumentedRule[] with business_statement + sheet_name
-    // When skipped: map RuleEntry[] to UndocumentedRule[]
-    const undocumentedRules = kiroResult.skipped
-      ? undocumentedEntries.map(e => ({ name: e.name, source: e.source }))
-      : kiroResult.reverse;
+    // Build directly from Kiro JSON — no merging with mechanical results
+    let finalGaps: GapResult[];
+    let undocumentedRules: UndocumentedRule[];
+
+    if (!kiroResult.skipped && kiroResult.kiroForward && kiroResult.kiroForward.length > 0) {
+      // Build GapResult[] from Kiro forward items
+      finalGaps = kiroResult.kiroForward.map((item, idx) => {
+        const status: import('../types').RuleStatus =
+          item.status === 'CONFIRMED' ? 'MATCH' :
+          item.status === 'NOT_CONFIRMED' ? 'MISSING' : 'MISMATCH';
+
+        const codeName = item.correct_code_name && 
+          !['SEARCH_REQUIRED', 'NOT_FOUND', 'UNKNOWN', 'N/A', ''].includes(item.correct_code_name.toUpperCase())
+          ? item.correct_code_name : '';
+
+        const repoEntry = codeName ? repoRules.get(codeName.toLowerCase()) : undefined;
+
+        return {
+          excel_name:      item.excel_name,
+          code_name:       codeName,
+          status,
+          issues:          item.status !== 'CONFIRMED' ? [item.notes] : [],
+          notes:           item.notes,
+          row_num:         idx + 1,
+          section:         tab,
+          recommendation:  {
+            action:     status === 'MATCH' ? 'NO_ACTION' : 'VERIFY_WITH_BUSINESS',
+            confidence: 'HIGH',
+            reason:     item.notes,
+          } as import('../types').Recommendation,
+          rule_file:       repoEntry?.source ?? null,
+          config_keys:     [],
+          hardcoded_dates: [],
+        } as GapResult;
+      });
+    } else {
+      finalGaps = gaps;
+    }
+
+    if (!kiroResult.skipped && kiroResult.kiroReverse && kiroResult.kiroReverse.length > 0) {
+      // Build UndocumentedRule[] from Kiro reverse items
+      undocumentedRules = kiroResult.kiroReverse.map(item => {
+        const entry = undocumentedEntries.find(e => e.name.toLowerCase() === item.name.toLowerCase());
+        return {
+          name:               item.name,
+          source:             entry?.source ?? item.name,
+          business_statement: item.business_statement ?? undefined,
+          sheet_name:         item.sheet_name ?? undefined,
+        };
+      });
+    } else {
+      undocumentedRules = kiroResult.reverse;
+    }
 
     if (kiroResult.error) {
+      // If Kiro timed out — abort and notify. Do not generate a potentially incomplete report.
+      if (kiroResult.error.includes('timed out')) {
+        send({
+          type: 'error',
+          error: `Kiro timed out after 300s. Report not generated to avoid false results. Try reducing the number of statements or try again.`,
+        });
+        res.end();
+        return;
+      }
+      // Other Kiro errors — warn but continue with mechanical results
       send({
         type: 'progress',
         message: `Kiro verification skipped: ${kiroResult.error}`,
@@ -690,7 +747,7 @@ function generateHtmlReport(
       : `<span style="color:#cc3300;font-style:italic">Not found</span>`;
     const stmtCell = (u as any).business_statement
       ? esc((u as any).business_statement)
-      : `<span style="color:#cc3300;font-style:italic;font-weight:600">Not documented in workbook</span>`;
+      : `<span style="color:#cc3300;font-style:italic;font-weight:600">Not documented in this sheet</span>`;
     return `
     <tr style="background:${rowBg};border-left:${borderLeft}">
       <td style="font-family:monospace;font-size:12px">${esc(u.name)}</td>

@@ -59,23 +59,19 @@ async function main() {
       }).join('\n\n')
     : '(none)';
 
-  // Build REVERSE_ITEMS
-  const reverseSection = undocEntries.slice(0, 25).map((r, i) => {
-    const body = r.body ? `\nBody:\n\`\`\`\n${r.body.slice(0, 600)}\n\`\`\`` : '';
-    return `${i+1}. name: "${r.name}"\n   kind: ${r.kind}\n   file: ${r.source}${body}`;
-  }).join('\n\n');
+  // Build REVERSE_ITEMS — name + file only, no bodies (Kiro reads from repo)
+  const reverseSection = undocEntries.slice(0, 25).map((r, i) =>
+    `${i+1}. \`${r.name}\` — file: \`${r.source}\``
+  ).join('\n');
 
-  // Excel index section
-  const excelIndexSection = tabSection
-    ? `\n\n## Excel Workbook Content — ${TAB}\n\n${tabSection}`
-    : '';
+  // Excel index section — strip ## Tab: header to avoid duplication
+  const lines = tabSection ? tabSection.split('\n') : [];
+  const excelContent = lines[0]?.startsWith('## Tab:') ? lines.slice(1).join('\n').trim() : tabSection;
 
   const prompt = template
     .replace('{{TAB_NAME}}', TAB)
-    .replace('{{TAB_TYPE}}', tabType)
     .replace('{{REPO_PATH}}', REPO)
-    .replace('{{EXCEL_INDEX}}', excelIndexSection)
-    .replace('{{FORWARD_ITEMS}}', forwardSection)
+    .replace('{{EXCEL_INDEX}}', excelContent || '')
     .replace('{{REVERSE_ITEMS}}', reverseSection);
 
   // Write to log file

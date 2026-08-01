@@ -155,7 +155,7 @@ export function AnalysisTable({ results, undocumentedRules = [] }: Props) {
                         </td>
                         <td style={{ ...td, fontSize: 12, color: found ? '#333' : '#cc3300' }}>
                           {u.business_statement
-                            ?? <span style={notFoundStyle}>Not documented in workbook</span>
+                            ?? <span style={notFoundStyle}>Not documented in this sheet</span>
                           }
                         </td>
                       </tr>

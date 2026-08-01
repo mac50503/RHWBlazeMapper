@@ -1,24 +1,22 @@
-# Kiro Verification Prompt
 # RHW Blaze Mapper — Post-Analysis Validation
-
-**IMPORTANT: Your response must be ONLY a valid JSON object. No text before or after. No explanation. No markdown. Just the JSON.**
 
 You are validating gap analysis results for a Rules Harvesting Workbook (RHW) against a Blaze Advisor rules repository.
 
-**PART 1** — You MAY search the repository at `{{REPO_PATH}}` to find or confirm rule implementations.
-**PART 2** — Use ONLY the data provided in this prompt. Do NOT read files or search the repository.
+- Read rule and function bodies directly from the repository at:
+  `{{REPO_PATH}}`
+- Consider a business statement CONFIRMED if the logic is implemented collectively across rules and helper functions.
+- The `excel_name` field references the full business statement from the Excel workbook content below.
 
 ---
 
-## Context
-
-- **Tab analyzed:** {{TAB_NAME}}
-- **Tab type:** {{TAB_TYPE}}
-- **Repository path:** {{REPO_PATH}}
+## Excel Workbook Content — {{TAB_NAME}}
 
 {{EXCEL_INDEX}}
 
-### Blaze naming conventions (for reference)
+---
+
+## Blaze Naming Conventions
+
 - `ruleXxx` — individual rule inside a ruleset (verifiable)
 - `fcnXxx` — function (verifiable)
 - `rsXxx` — ruleset container/orchestrator (NOT individually verifiable)
@@ -27,73 +25,62 @@ You are validating gap analysis results for a Rules Harvesting Workbook (RHW) ag
 
 ---
 
-## PART 1 — Forward Check Validation
+## PART 1 — Forward Check
 
-These items need verification. For each:
+Read the Excel Workbook Content above and extract every row that contains actionable business logic (conditions, formulas, or rules). Skip headers, revision history, narrative descriptions, and overview rows.
 
-- Read the `excel_name` (business statement from the workbook).
-- Read the `code_name` body provided inline.
-- **Step 1:** Does the body of `code_name` implement the logic described in `excel_name`? Yes or No.
-- **Step 2:** If NO — regardless of current status — **search the repository at `{{REPO_PATH}}`** using your file tools. Look in the `file:` path first, then nearby files. Find the rule or function whose body actually implements the `excel_name` logic.
-- **Step 3:** Return the correct `code_name` you found (or original if confirmed correct) and your verdict.
-
-{{FORWARD_ITEMS}}
+For each extracted statement, search the repository to find the rule or function that implements it. Consider CONFIRMED if the logic is implemented collectively across rules and helper functions.
 
 ---
 
 ## PART 2 — Reverse Check
 
-The Excel workbook content is provided above in the "Excel Workbook Content" section.
-Below is a list of rules from the repository. For each rule:
-1. Read its body (provided inline)
-2. Search the Excel content above for any row that describes the same logic
-3. Return the exact row text and the tab name where you found it
-4. If nothing matches, return null for both fields
+For each rule/function below, read its body from the repository and search the Excel content above for a matching business statement. Sort results with non-null matches first.
 
-**STRICT: Do NOT read any files. Do NOT search the repository. Use ONLY the rule bodies below and the Excel content above.**
+**Rules/functions to check:**
 
 {{REVERSE_ITEMS}}
 
 ---
 
-## Instructions
+## Repository Search Strategy
 
-1. For PART 1: determine if the `code_name` body correctly implements the `excel_name` logic — search the repository if needed
-2. For PART 1 MISSING or NOT_CONFIRMED: actively search `{{REPO_PATH}}` to find the rule or function that implements the `excel_name` logic
-3. For PART 1 MISMATCH: determine if the condition difference is real or context-level
-4. For PART 2: use ONLY the Excel content and rule bodies provided in this prompt — do NOT read files or search the repository
-6. Keep all text fields to ONE sentence maximum
-7. **YOUR ENTIRE RESPONSE MUST BE ONLY THE JSON OBJECT — start with `{` and end with `}`, nothing else**
+For PART 2, extract each rule body using grep pattern matching:
+
+    Pattern: "<name>{RULE_NAME}</name>"
+    Context lines: 30 (enough to capture the <body> tag)
+
+Do NOT use the read tool on full ruleset files.
+Batch grep calls: up to 5 rule names per grep call using alternation:
+
+    grep -E "<name>(rule1|rule2|rule3)</name>" file -A 25
+
+## Processing limit
+
+Process PART 2 in batches of 8 rules maximum per iteration.
+
+---
 
 ## Required Response Format
+
+Respond ONLY with the following JSON — no explanation, no markdown wrapping, just the JSON object:
 
 ```json
 {
   "forward": [
     {
-      "excel_name": "exact excel_name from input",
-      "status": "CONFIRMED",
-      "correct_code_name": "the rule/function name that actually implements the logic, or same as code_name if confirmed",
+      "excel_name": "exact business statement from the Excel workbook (full text)",
+      "status": "CONFIRMED | NOT_CONFIRMED | PARTIAL",
+      "correct_code_name": "rule or function name that implements the logic",
       "notes": "one sentence reason"
     }
   ],
   "reverse": [
     {
-      "name": "exact rule name from input",
+      "name": "exact rule/function name",
       "business_statement": "exact quote from Excel tab or null",
-      "sheet_name": "sheet tab name where found or null"
+      "sheet_name": "sheet tab name or null"
     }
   ]
 }
 ```
-
-### Status values (PART 1)
-
-- `CONFIRMED` — `code_name` body correctly implements the statement
-- `NOT_CONFIRMED` — `code_name` does not implement the statement — set `correct_code_name` to the rule you found in the repo that does
-- `PARTIAL` — partial implementation, missing conditions or edge cases
-
-### Reverse check fields (PART 2)
-
-- `business_statement` — exact quote from the Excel tab that corresponds to this rule, or `null` if not found
-- `sheet_name` — name of the Excel sheet/tab where the statement was found, or `null` if not found

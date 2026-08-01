@@ -26,8 +26,8 @@ import { runKiro } from './kiroRunner';
 import type { GapResult, RuleEntry } from '../types';
 
 // Max items to send in a single batch (to stay within Kiro context window)
-const MAX_FORWARD_ITEMS = 30;
-const MAX_REVERSE_ITEMS = 25;
+const MAX_FORWARD_ITEMS = 15;
+const MAX_REVERSE_ITEMS = 15;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -45,10 +45,13 @@ export interface KiroVerifyInput {
 }
 
 export interface KiroVerifyOutput {
-  forward:    GapResult[];
-  reverse:    import('../types').UndocumentedRule[];
-  skipped:    boolean;   // true if Kiro was not called (nothing to verify or error)
-  error?:     string;
+  forward:      GapResult[];   // mechanical results (for fallback)
+  reverse:      import('../types').UndocumentedRule[];
+  skipped:      boolean;
+  error?:       string;
+  // Raw Kiro results — use these to build the final report
+  kiroForward?: KiroForwardItem[];
+  kiroReverse?: KiroReverseItem[];
 }
 
 /**
@@ -77,16 +80,19 @@ export async function runKiroVerification(input: KiroVerifyInput): Promise<KiroV
   // Build the prompt
   const prompt = buildVerifyPrompt({
     tabName,
-    tabType,
     repoPath,
-    forwardItems: forwardToVerify,
     reverseItems: reverseToVerify,
-    repoRules,
     excelIndexPath,
   });
 
   // Call Kiro CLI
-  const result = await runKiro(prompt, 'claude-haiku-4.5', 180_000);
+  const result = await runKiro(prompt, 'claude-haiku-4.5', 300_000);
+
+  // Log raw output for debugging — write full to file
+  const rawPath = require('path').join(require('os').homedir(), 'Documents', 'RHW-Analysis', 'kiro-raw-debug.txt');
+  require('fs').mkdirSync(require('path').dirname(rawPath), { recursive: true });
+  require('fs').writeFileSync(rawPath, result.output, 'utf8');
+  console.log(`\n[KIRO RAW OUTPUT] Written to: ${rawPath} (${result.output.length} chars)`);
 
   if (!result.success) {
     return { forward, reverse: reverseAsUndoc, skipped: true, error: result.error };
@@ -98,13 +104,31 @@ export async function runKiroVerification(input: KiroVerifyInput): Promise<KiroV
     return { forward, reverse: reverseAsUndoc, skipped: true, error: 'Kiro response was not valid JSON' };
   }
 
+  // Log parsed JSON for debugging — write full to file
+  const debugJson = JSON.stringify(parsed, null, 2);
+  const debugPath = require('path').join(require('os').homedir(), 'Documents', 'RHW-Analysis', 'kiro-parsed-debug.json');
+  require('fs').mkdirSync(require('path').dirname(debugPath), { recursive: true });
+  require('fs').writeFileSync(debugPath, debugJson, 'utf8');
+  console.log(`\n[KIRO PARSED JSON] Written to: ${debugPath} (${debugJson.length} chars)`);
+  console.log('[KIRO PARSED forward count]:', parsed.forward?.length);
+  console.log('[KIRO PARSED reverse count]:', parsed.reverse?.length);
+  // Print first forward item and first reverse item for quick check
+  if (parsed.forward?.[0]) console.log('[KIRO first forward]:', JSON.stringify(parsed.forward[0]));
+  if (parsed.reverse?.[0]) console.log('[KIRO first reverse]:', JSON.stringify(parsed.reverse[0]));
+
   // Apply forward updates
   const updatedForward = applyForwardUpdates(forward, parsed.forward);
 
   // Apply reverse — enrich with business_statement and sheet_name from Kiro
   const updatedReverse = applyReverseFilter(reverse, parsed.reverse);
 
-  return { forward: updatedForward, reverse: updatedReverse, skipped: false };
+  return {
+    forward:      forward,  // keep mechanical for fallback
+    reverse:      updatedReverse,
+    skipped:      false,
+    kiroForward:  parsed.forward,
+    kiroReverse:  parsed.reverse,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -113,16 +137,13 @@ export async function runKiroVerification(input: KiroVerifyInput): Promise<KiroV
 
 interface PromptInput {
   tabName:        string;
-  tabType:        string;
   repoPath:       string;
-  forwardItems:   GapResult[];
   reverseItems:   RuleEntry[];
-  repoRules:      Map<string, RuleEntry>;
   excelIndexPath?: string;
 }
 
 function buildVerifyPrompt(input: PromptInput): string {
-  const { tabName, tabType, repoPath, forwardItems, reverseItems, repoRules, excelIndexPath } = input;
+  const { tabName, repoPath, reverseItems, excelIndexPath } = input;
 
   // Load the prompt template
   const templatePath = path.join(__dirname, '..', 'prompts', 'kiro-verify.md');
@@ -133,7 +154,7 @@ function buildVerifyPrompt(input: PromptInput): string {
     template = buildFallbackTemplate();
   }
 
-  // Load Excel index — extract only the section for this tab to keep prompt lean
+  // Load Excel index — extract only the section for this tab
   let excelIndexSection = '';
   if (excelIndexPath) {
     try {
@@ -141,52 +162,33 @@ function buildVerifyPrompt(input: PromptInput): string {
       const fullIndex = readExcelIndex(excelIndexPath);
       if (fullIndex) {
         const tabSection = extractTabSection(fullIndex, tabName);
-        excelIndexSection = tabSection
-          ? `\n\n## Excel Workbook Content — ${tabName}\n\n${tabSection}`
-          : `\n\n## Excel Workbook Content\n\n${fullIndex.slice(0, 4000)}`;
+        if (tabSection) {
+          // Strip the "## Tab: ..." header line — template already has the header
+          const lines = tabSection.split('\n');
+          const contentLines = lines[0].startsWith('## Tab:') ? lines.slice(1) : lines;
+          excelIndexSection = contentLines.join('\n').trim();
+        } else {
+          excelIndexSection = fullIndex.slice(0, 4000);
+        }
       }
     } catch {
-      // Index not available — Kiro will work without it
+      // Index not available
     }
   }
 
-  // Build FORWARD_ITEMS section
-  const forwardSection = forwardItems.length > 0
-    ? forwardItems.map((g, i) => {
-        const entry = repoRules.get(g.code_name?.toLowerCase() ?? '') ??
-                      repoRules.get(g.excel_name?.toLowerCase() ?? '');
-        const body = entry?.body
-          ? `\nRule body:\n\`\`\`\n${entry.body.slice(0, 800)}\n\`\`\``
-          : '';
-        const issues = g.issues.length > 0
-          ? `\nIssues found: ${g.issues.join('; ')}`
-          : '';
-        return `${i + 1}. excel_name: "${g.excel_name}"
-   code_name: "${g.code_name || 'NOT FOUND'}"
-   current_status: ${g.status}
-   file: ${entry?.source ?? 'unknown'}${issues}${body}`;
-      }).join('\n\n')
-    : '(none)';
-
-  // Build REVERSE_ITEMS section
+  // Build REVERSE_ITEMS — simple list: name + file path only
+  // Kiro reads the bodies directly from the repo using grep
   const reverseSection = reverseItems.length > 0
-    ? reverseItems.map((r, i) => {
-        const body = r.body
-          ? `\nRule body:\n\`\`\`\n${r.body.slice(0, 600)}\n\`\`\``
-          : '';
-        return `${i + 1}. name: "${r.name}"
-   kind: ${r.kind ?? 'unknown'}
-   file: ${r.source}${body}`;
-      }).join('\n\n')
+    ? reverseItems.map((r, i) =>
+        `${i + 1}. \`${r.name}\` — file: \`${r.source}\``
+      ).join('\n')
     : '(none)';
 
   // Replace placeholders
   return template
     .replace('{{TAB_NAME}}', tabName)
-    .replace('{{TAB_TYPE}}', tabType)
     .replace('{{REPO_PATH}}', repoPath)
     .replace('{{EXCEL_INDEX}}', excelIndexSection)
-    .replace('{{FORWARD_ITEMS}}', forwardSection)
     .replace('{{REVERSE_ITEMS}}', reverseSection);
 }
 
@@ -213,14 +215,14 @@ Respond ONLY with valid JSON:
 // Response parser
 // ---------------------------------------------------------------------------
 
-interface KiroForwardItem {
+export interface KiroForwardItem {
   excel_name:         string;
   status:             'CONFIRMED' | 'NOT_CONFIRMED' | 'PARTIAL';
   correct_code_name?: string;
   notes:              string;
 }
 
-interface KiroReverseItem {
+export interface KiroReverseItem {
   name:               string;
   business_statement: string | null;
   sheet_name:         string | null;
@@ -238,13 +240,12 @@ function parseKiroResponse(output: string): KiroResponse | null {
     .replace(/▸[^\n]*\n/g, '')
     .trim();
 
-  // Try to extract JSON block from output
-  const jsonMatch =
-    clean.match(/```json\s*([\s\S]*?)```/) ??
-    clean.match(/```\s*([\s\S]*?)```/) ??
-    clean.match(/(\{[\s\S]*\})/);
-
-  const jsonStr = jsonMatch ? jsonMatch[1].trim() : clean;
+  // Extract JSON: find first { and last } — ignores any conversational text before/after
+  const start = clean.indexOf('{');
+  const end = clean.lastIndexOf('}');
+  const jsonStr = (start !== -1 && end !== -1 && end > start)
+    ? clean.slice(start, end + 1)
+    : clean;
 
   try {
     const parsed = JSON.parse(jsonStr) as KiroResponse;
