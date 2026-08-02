@@ -100,18 +100,6 @@ function App() {
           <CompletionBanner event={completeEvent} tabTypes={tabTypes} selectedTab={selectedTab} />
         )}
 
-        {/* Results table */}
-        {(results.length > 0 || completeEvent) && (
-          <section style={resultsSection}>
-            <h2 style={resultsSectionTitle}>
-              Analysis Results
-              {selectedTab && (
-                <span style={tabBadge}>{selectedTab}</span>
-              )}
-            </h2>
-            <AnalysisTable results={results} undocumentedRules={undocumentedRules} />
-          </section>
-        )}
       </main>
     </div>
   );

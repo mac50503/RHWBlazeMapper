@@ -192,21 +192,25 @@ Tab:    Leg Base Credits
 
 ## What's Pending 🔧
 
-### 1. Forward check table — no visual Kiro correction indicator
-- When Kiro changes code_name, the table updates but no badge showing "🤖 Kiro corrected"
+### 1. Kiro inconsistency — results vary between runs
+- When prompt is pasted manually in Kiro interactive terminal: best results (finds all statements)
+- When sent via backend `@file`: results are more limited / inconsistent
+- Hypothesis: Kiro may have session memory that helps on manual runs
+- Load Tabs must be done after every backend restart — `session.excelIndexPath` is required
+- First run after Load Tabs tends to produce better results than subsequent runs
 
-### 2. Annotated Excel download
+### 2. Forward check table — no visual Kiro correction indicator
+- When Kiro changes code_name, no badge showing "🤖 Kiro corrected"
+
+### 3. Annotated Excel download
 - `session.lastAnnotatedExcelPath` never set — endpoint returns 404
-- Python reference has `excel_annotator.py` — not yet ported
 
-### 3. RULE_NAMES tab — end-to-end Kiro verification untested
-- `findUndocumentedByRulesets` uses `extractStatements()` which may return few results for RULE_NAMES tabs
+### 4. RULE_NAMES tab — end-to-end Kiro verification untested
 
-### 4. `runAnalysisPipeline` (non-stream) outdated
-- `/run_analysis` route doesn't use Kiro or `findUndocumentedByRulesets`
+### 5. `runAnalysisPipeline` (non-stream) outdated
+- `/run_analysis` route doesn't use Kiro
 
-### 5. Debug logs still in kiroVerifier.ts
-- `kiro-prompt-last.txt`, `kiro-raw-debug.txt`, `kiro-parsed-debug.json` writes — intentionally kept during development
+### 6. Debug logs still in kiroVerifier.ts — intentionally kept during development
 
 ---
 

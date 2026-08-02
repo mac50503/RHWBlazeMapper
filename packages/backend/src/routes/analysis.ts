@@ -461,23 +461,26 @@ analysisRouter.post('/run_analysis_stream', async (req: Request, res: Response) 
 
     if (!kiroResult.skipped && kiroResult.kiroForward && kiroResult.kiroForward.length > 0) {
       // Build GapResult[] from Kiro forward items
-      finalGaps = kiroResult.kiroForward.map((item, idx) => {
-        const status: import('../types').RuleStatus =
-          item.status === 'CONFIRMED' ? 'MATCH' :
-          item.status === 'NOT_CONFIRMED' ? 'MISSING' : 'MISMATCH';
+      finalGaps = kiroResult.kiroForward
+        .filter(item => item && item.excel_name)
+        .map((item, idx) => {
+          const status: import('../types').RuleStatus =
+            item.status === 'CONFIRMED' ? 'MATCH' :
+            item.status === 'NOT_CONFIRMED' ? 'MISSING' : 'MISMATCH';
 
-        const codeName = item.correct_code_name && 
-          !['SEARCH_REQUIRED', 'NOT_FOUND', 'UNKNOWN', 'N/A', ''].includes(item.correct_code_name.toUpperCase())
-          ? item.correct_code_name : '';
+          const correctName = item.correct_code_name ?? '';
+          const codeName = correctName &&
+            !['SEARCH_REQUIRED', 'NOT_FOUND', 'UNKNOWN', 'N/A', ''].includes(correctName.toUpperCase())
+            ? correctName : '';
 
-        const repoEntry = codeName ? repoRules.get(codeName.toLowerCase()) : undefined;
+          const repoEntry = codeName ? repoRules.get(codeName.toLowerCase()) : undefined;
 
         return {
           excel_name:      item.excel_name,
           code_name:       codeName,
           status,
-          issues:          item.status !== 'CONFIRMED' ? [item.notes] : [],
-          notes:           item.notes,
+          issues:          item.status !== 'CONFIRMED' ? [item.notes ?? ''].filter(Boolean) : [],
+          notes:           item.notes ?? '',
           row_num:         idx + 1,
           section:         tab,
           recommendation:  {
@@ -496,10 +499,12 @@ analysisRouter.post('/run_analysis_stream', async (req: Request, res: Response) 
 
     if (!kiroResult.skipped && kiroResult.kiroReverse && kiroResult.kiroReverse.length > 0) {
       // Build UndocumentedRule[] from Kiro reverse items
-      undocumentedRules = kiroResult.kiroReverse.map(item => {
-        const entry = undocumentedEntries.find(e => e.name.toLowerCase() === item.name.toLowerCase());
-        return {
-          name:               item.name,
+      undocumentedRules = kiroResult.kiroReverse
+        .filter(item => item && item.name)
+        .map(item => {
+          const entry = undocumentedEntries.find(e => e.name.toLowerCase() === item.name.toLowerCase());
+          return {
+            name:               item.name,
           source:             entry?.source ?? item.name,
           business_statement: item.business_statement ?? undefined,
           sheet_name:         item.sheet_name ?? undefined,
@@ -772,8 +777,22 @@ function generateHtmlReport(
     table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
     th { background: #f5f5f5; text-align: left; padding: 8px 10px; border-bottom: 2px solid #ddd; position: sticky; top: 0; }
     td { padding: 6px 10px; border-bottom: 1px solid #eee; vertical-align: top; }
-    h2 { margin-top: 32px; font-size: 1.1em; }
     .section-label { font-size: 0.75em; background: #eee; padding: 1px 6px; border-radius: 3px; margin-left: 6px; }
+    .section-toggle {
+      display: flex; align-items: center; gap: 10px;
+      cursor: pointer; user-select: none;
+      margin-top: 32px; margin-bottom: 0;
+      padding: 10px 14px;
+      background: #f5f7fa; border: 1px solid #dde3ec;
+      border-radius: 6px 6px 0 0;
+      font-size: 1em; font-weight: 600; color: #1a2b4a;
+    }
+    .section-toggle:hover { background: #ebeef5; }
+    .section-toggle .arrow { font-size: 12px; transition: transform 0.2s; }
+    .section-toggle.collapsed .arrow { transform: rotate(-90deg); }
+    .section-body { border: 1px solid #dde3ec; border-top: none; border-radius: 0 0 6px 6px; overflow: hidden; }
+    .section-body.hidden { display: none; }
+    .badge-count { background: #e8f0fe; color: #0055aa; border-radius: 10px; padding: 2px 8px; font-size: 12px; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -790,28 +809,49 @@ function generateHtmlReport(
     <span class="count-badge" style="background:#e8f4fd">UNDOC: ${undocumented.length}</span>
   </div>
 
-  <h2>Forward Check Results</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>#</th>
-        <th>Excel Name</th>
-        <th>Code Name</th>
-        <th>Status</th>
-        <th>Issues</th>
-        <th>Recommendation</th>
-        <th>File</th>
-      </tr>
-    </thead>
-    <tbody>${rows}</tbody>
-  </table>
+  <div class="section-toggle" onclick="toggle('forward')">
+    <span class="arrow">▾</span>
+    <span>Forward Check Results</span>
+    <span class="badge-count">${gaps.length}</span>
+  </div>
+  <div class="section-body" id="forward">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Excel Name</th>
+          <th>Code Name</th>
+          <th>Status</th>
+          <th>Issues</th>
+          <th>Recommendation</th>
+          <th>File</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>
 
   ${undocumented.length > 0 ? `
-  <h2>Reverse Check — Rules found in repo related to this tab (${undocumented.length})</h2>
-  <table>
-    <thead><tr><th>Rule Name</th><th>File</th><th>Sheet</th><th>Business Statement</th></tr></thead>
-    <tbody>${undocRows}</tbody>
-  </table>` : ''}
+  <div class="section-toggle" onclick="toggle('reverse')">
+    <span class="arrow">▾</span>
+    <span>Reverse Check — Rules found in repo related to this tab</span>
+    <span class="badge-count">${undocumented.length}</span>
+  </div>
+  <div class="section-body" id="reverse">
+    <table>
+      <thead><tr><th>Rule Name</th><th>File</th><th>Sheet</th><th>Business Statement</th></tr></thead>
+      <tbody>${undocRows}</tbody>
+    </table>
+  </div>` : ''}
+
+  <script>
+    function toggle(id) {
+      const body = document.getElementById(id);
+      const btn = body.previousElementSibling;
+      const collapsed = body.classList.toggle('hidden');
+      btn.classList.toggle('collapsed', collapsed);
+    }
+  </script>
 </body>
 </html>`;
 }
