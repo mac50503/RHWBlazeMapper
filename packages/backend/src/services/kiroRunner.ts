@@ -71,18 +71,19 @@ export async function runKiro(
     };
   }
 
-  // Write prompt to temp file for reference (debugging)
+  // Write prompt to temp file and pass as @file argument
+  // Passing large prompts as direct CLI args can be truncated on Windows
   const promptFile = join(tmpdir(), `rhw_blaze_mapper_${Date.now()}.txt`);
   writeFileSync(promptFile, prompt, 'utf8');
 
-  // Send prompt as direct message argument (not @file which Kiro treats as context)
-  // Use forward slashes for Windows compatibility
+  const promptArg = `@${promptFile.replace(/\\/g, '/')}`;
+
   const args = [
     'chat',
     '--no-interactive',
     '--trust-all-tools',
     '--model', model,
-    prompt,  // Pass prompt directly as the message argument
+    promptArg,
   ];
 
   return new Promise((resolve) => {

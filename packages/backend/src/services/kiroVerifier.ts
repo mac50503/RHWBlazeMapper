@@ -85,6 +85,15 @@ export async function runKiroVerification(input: KiroVerifyInput): Promise<KiroV
     excelIndexPath,
   });
 
+  // Save prompt to disk for debugging
+  try {
+    const promptLogPath = require('path').join(
+      require('os').homedir(), 'Documents', 'RHW-Analysis', 'kiro-prompt-last.txt'
+    );
+    require('fs').mkdirSync(require('path').dirname(promptLogPath), { recursive: true });
+    require('fs').writeFileSync(promptLogPath, prompt, 'utf8');
+  } catch { /* ignore */ }
+
   // Call Kiro CLI
   const result = await runKiro(prompt, 'claude-haiku-4.5', 300_000);
 
@@ -188,6 +197,7 @@ function buildVerifyPrompt(input: PromptInput): string {
   return template
     .replace('{{TAB_NAME}}', tabName)
     .replace('{{REPO_PATH}}', repoPath)
+    .replace('{{EXCEL_INDEX_PATH}}', excelIndexPath ?? 'not available')
     .replace('{{EXCEL_INDEX}}', excelIndexSection)
     .replace('{{REVERSE_ITEMS}}', reverseSection);
 }

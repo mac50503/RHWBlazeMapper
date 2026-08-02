@@ -6,9 +6,9 @@ Gap analysis tool between **Rules Harvesting Workbooks (Excel)** and **Blaze Adv
 
 Given an Excel workbook tab and a Blaze Advisor repository, the tool produces two reports:
 
-**Forward Check** — for each business statement in the Excel tab, finds the rule or function in the repository that implements it, using semantic scoring. Kiro then verifies each match and corrects wrong ones.
+**Forward Check** — for each business statement in the Excel tab, finds the rule or function in the repository that implements it, using semantic scoring. Kiro then verifies each match by reading the actual rule bodies from the repo, correcting wrong ones.
 
-**Reverse Check** — finds rules and functions in the repository that are semantically related to the tab but may not be documented in the Excel. Kiro searches the workbook content to find the corresponding business statement for each.
+**Reverse Check** — finds rules and functions in the repository semantically related to the tab. Kiro searches the entire workbook index to find the corresponding business statement for each.
 
 ### Status types
 
@@ -26,8 +26,8 @@ Given an Excel workbook tab and a Blaze Advisor repository, the tool produces tw
 Each reverse candidate shows:
 - **Rule Name** — rule or function in the repo
 - **File** — source file path
-- **Sheet** — Excel sheet where Kiro found the matching statement (green row) or "Not found" (red row)
-- **Business Statement** — exact quote from the Excel tab
+- **Sheet** — Excel sheet where Kiro found the matching statement (green row) or "Not documented in this sheet" (red row)
+- **Business Statement** — exact quote from the Excel workbook
 
 ---
 
@@ -63,10 +63,12 @@ Opens:
 ## Usage
 
 1. **Upload Workbook** — select an Excel RHW workbook
-2. **Load Tabs →** — classifies each tab (PROSE_LOGIC, RULE_NAMES, etc.) and generates an Excel index for Kiro
+2. **Load Tabs →** — classifies each tab and generates an Excel index for Kiro
 3. **Select a tab** from the list
 4. **Enter repo path** — local path to the Blaze Advisor `CrewRulesRepository`
-5. **▶ Run Analysis** — runs forward check → reverse check → Kiro verification
+5. **▶ Run Analysis** — forward check → reverse check → Kiro verification
+
+> ⚠️ **Important:** Always do Load Tabs before Run Analysis after restarting the backend. The Excel index is generated at Load Tabs time and is required for Kiro verification.
 
 Reports save to `~/Documents/RHW-Analysis/reports/`
 
@@ -77,19 +79,19 @@ Reports save to `~/Documents/RHW-Analysis/reports/`
 ```
 Load Tabs
   → classifyTab()         PROSE_LOGIC | RULE_NAMES | LEGALITY_* | LOOKUP_TABLE | REFERENCE
-  → generateExcelIndex()  creates plain-text index of all tabs for Kiro
+  → generateExcelIndex()  creates plain-text .index.md of ALL tabs for Kiro
 
 Run Analysis
-  → indexRules()          walks repo, extracts rules/functions with SRL bodies (cached per repo)
+  → indexRules()          walks repo, extracts rules/functions (cached per repo)
   → Forward Check
       PROSE tabs  → analyzeProseTabByStatement()   semantic score per statement
       RULE_NAMES  → analyzeGaps()                  exact/fuzzy name matching
   → Reverse Check
-      → findUndocumentedByRulesets()  top 25 rules by name-based semantic score
-  → Kiro Verification
-      PART 1: verify forward matches, correct wrong code_names, find MISSING rules
-      PART 2: for each reverse candidate, find its business statement in the Excel
-  → HTML Report + UI update
+      → findUndocumentedByRulesets()  top 15 rules by name-based semantic score
+  → Kiro Verification (single call, 300s timeout)
+      PART 1: Kiro greps rule bodies from repo, validates/corrects forward matches
+      PART 2: Kiro greps rule bodies, searches entire workbook index for statements
+  → HTML Report + UI update (built directly from Kiro JSON)
 ```
 
 ---

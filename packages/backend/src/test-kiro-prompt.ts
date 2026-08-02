@@ -71,6 +71,7 @@ async function main() {
   const prompt = template
     .replace('{{TAB_NAME}}', TAB)
     .replace('{{REPO_PATH}}', REPO)
+    .replace('{{EXCEL_INDEX_PATH}}', indexResult.filePath)
     .replace('{{EXCEL_INDEX}}', excelContent || '')
     .replace('{{REVERSE_ITEMS}}', reverseSection);
 

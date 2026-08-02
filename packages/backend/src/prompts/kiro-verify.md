@@ -6,6 +6,9 @@ You are validating gap analysis results for a Rules Harvesting Workbook (RHW) ag
   `{{REPO_PATH}}`
 - Consider a business statement CONFIRMED if the logic is implemented collectively across rules and helper functions.
 - The `excel_name` field references the full business statement from the Excel workbook content below.
+- For cross-tab searches, the full workbook index (plain text, all tabs) is available at:
+  `{{EXCEL_INDEX_PATH}}`
+  Read it using your file tools if you need to find a statement in another tab.
 
 ---
 
@@ -35,7 +38,7 @@ For each extracted statement, search the repository to find the rule or function
 
 ## PART 2 — Reverse Check
 
-For each rule/function below, read its body from the repository and search the Excel content above for a matching business statement. Sort results with non-null matches first.
+For each rule/function below, read its body from the repository and **Search the ENTIRE workbook index** (not just the current tab) for matching business statements. Sort results with non-null matches first.
 
 **Rules/functions to check:**
 

@@ -1,6 +1,6 @@
 # RHW Blaze Mapper — Session Context
 
-**Last updated:** 2026-08-01  
+**Last updated:** 2026-08-02  
 **Session:** Gap analysis + Kiro verification implementation
 
 ---
@@ -9,10 +9,8 @@
 
 Compares a **Rules Harvesting Workbook (Excel)** against a **Blaze Advisor rules repository**, producing two reports:
 
-1. **Forward Check** — for each business statement in the Excel tab, finds the rule/function in the repo that implements it (semantic scoring)
-2. **Reverse Check** — finds rules/functions in the repo related to the tab that may not be documented in the Excel
-
-Both reports are verified by **Kiro CLI** after the mechanical analysis.
+1. **Forward Check** — for each business statement in the Excel tab, finds the rule/function in the repo that implements it (semantic scoring). Kiro verifies and corrects each match.
+2. **Reverse Check** — finds rules/functions in the repo semantically related to the tab. Kiro searches the entire workbook index for matching business statements.
 
 ---
 
@@ -20,10 +18,7 @@ Both reports are verified by **Kiro CLI** after the mechanical analysis.
 
 Python reference at: `C:\Users\X322736\Downloads\GAP analizer\repo\rhw-vs-code-gap-analyzer`
 
-Key files to understand:
-- `engines/blaze/blaze_gap_analyzer.py` — full Blaze analysis engine
-- `app.py` — Flask API
-- `rule_index_generator.py` — Kiro-based rule index generator
+Key files: `engines/blaze/blaze_gap_analyzer.py`, `app.py`, `rule_index_generator.py`
 
 ---
 
@@ -34,22 +29,23 @@ Excel (.xlsx)
   → classifyTab()         PROSE_LOGIC | RULE_NAMES | LEGALITY_* | LOOKUP_TABLE | REFERENCE
   → extractStatements()   individual business statements from the tab
   → indexRules()          walks repo, extracts all rules/functions with bodies (cached)
-  → generateExcelIndex()  creates plain-text .index.md of all tabs (at Load Tabs time)
+  → generateExcelIndex()  creates plain-text .index.md of ALL tabs (at Load Tabs time)
 
 Forward Check:
   PROSE tabs    → analyzeProseTabByStatement()   semantic score per statement vs repo
   RULE_NAMES    → analyzeGaps()                  exact/fuzzy name matching
 
 Reverse Check:
-  → findUndocumentedByRulesets()   top 25 rules semantically related to tab (name-based scoring)
+  → findUndocumentedByRulesets()   top 15 rules by name-based semantic score
                                    excludes infrastructure rules, already-matched rules
 
-Kiro Verification:
+Kiro Verification (single call, 300s timeout):
   → runKiroVerification()
-      PART 1: validates forward check — Kiro searches repo to confirm/correct each match
+      PART 1: Kiro reads rule bodies FROM REPO via grep, validates each forward match,
               returns correct_code_name when it finds a better match
-      PART 2: for each reverse candidate, Kiro searches the Excel index to find
-              the business statement that corresponds to it
+      PART 2: Kiro reads rule bodies FROM REPO via grep, searches ENTIRE workbook index
+              (.index.md) for matching business statements
+      Report built DIRECTLY from Kiro JSON — no merging with mechanical results
 ```
 
 ---
@@ -60,85 +56,81 @@ Kiro Verification:
 
 | File | Purpose |
 |------|---------|
-| `services/blazeIndexer.ts` | Walks Blaze repo, extracts rules with CDATA bodies. Handles `<rule><name>...<body>` pattern (no srl: namespace). kind: rule\|function\|ruleset\|decision_table\|group_template |
-| `services/excelParser.ts` | Parses Excel workbooks. `classifyTab()` detects PROSE_LOGIC using business-rule markers. `extractStatements()` extracts individual statements. `extractTabText()` for full text |
-| `services/gapAnalyzer.ts` | Forward check scoring. `analyzeProseTabByStatement()`. `findUndocumentedByRulesets()` uses **name-based scoring** (not body) for reverse check candidates |
-| `services/excelIndexer.ts` | Generates `workbook.index.md` at Load Tabs time — plain text of all non-REFERENCE tabs. Used by Kiro to find business statements |
-| `services/kiroVerifier.ts` | Builds prompt from `kiro-verify.md`, calls Kiro CLI, parses JSON response, applies updates to forward and reverse results |
-| `services/kiroRunner.ts` | Spawns Kiro CLI as subprocess. Sends prompt as direct argument (NOT @file — Kiro treats @file as context to analyze, not instructions) |
-| `routes/analysis.ts` | Main stream route `/run_analysis_stream`. Session caches: rule index (by repo path), excel index path |
-| `prompts/kiro-verify.md` | Kiro prompt template with {{placeholders}} |
-| `prompts/blaze-glossary.md` | Full Blaze SRL reference — Kiro uses this to understand Blaze constructs |
+| `services/blazeIndexer.ts` | Walks Blaze repo. Strategy 1b: `<rule><name>...<body>` (no srl: namespace). kind: rule\|function\|ruleset\|decision_table\|group_template |
+| `services/excelParser.ts` | `classifyTab()` detects PROSE_LOGIC. `extractStatements()` extracts individual statements |
+| `services/gapAnalyzer.ts` | `analyzeProseTabByStatement()`. `findUndocumentedByRulesets()` — name-based scoring, top 15 |
+| `services/excelIndexer.ts` | Generates `workbook.index.md` at Load Tabs — plain text ALL non-REFERENCE tabs |
+| `services/kiroVerifier.ts` | Builds prompt, calls Kiro, parses JSON. Saves prompt to `kiro-prompt-last.txt`. MAX=15 items each part |
+| `services/kiroRunner.ts` | Spawns Kiro CLI. Uses `@file` for prompt delivery. Model: `claude-haiku-4.5`. Timeout: 300s |
+| `routes/analysis.ts` | SSE stream. Session: rule index cache + excelIndexPath. Aborts on Kiro timeout |
+| `prompts/kiro-verify.md` | Kiro prompt template |
+| `prompts/blaze-glossary.md` | Full Blaze SRL reference |
 
 ### Frontend (`packages/frontend/src/`)
 
 | File | Purpose |
 |------|---------|
-| `App.tsx` | State: results, completeEvent, undocumentedRules. handleComplete() replaces results with Kiro-verified finals |
-| `components/AnalysisTable.tsx` | Forward check table + collapsible reverse check table. Green rows = found in Excel, Red rows = not found |
-| `components/WorkbookUpload.tsx` | Upload Excel, Load Tabs, select tab |
+| `App.tsx` | State: results, completeEvent, undocumentedRules. handleComplete() uses Kiro JSON directly |
+| `components/AnalysisTable.tsx` | Forward table + collapsible reverse table. Green=found, Red=not found in workbook |
+| `components/WorkbookUpload.tsx` | Upload Excel, Load Tabs, tab selection |
 | `components/RunButton.tsx` | SSE stream consumer, progress log |
-| `components/RepoInput.tsx` | Repo path input + validate |
+| `components/RepoInput.tsx` | Repo path + validate |
 
 ### Test Scripts (`packages/backend/src/`)
 
 | File | Purpose |
 |------|---------|
-| `test-reverse-check.ts` | Full pipeline test: forward + reverse + Kiro verification |
-| `test-semantic-score.ts` | Shows top 25 semantically scored rules for a tab (no Kiro) |
-| `test-kiro-prompt.ts` | Generates the exact prompt that would be sent to Kiro, writes to `kiro-prompt-debug.txt` |
+| `test-reverse-check.ts` | Full pipeline: forward + reverse + Kiro. Shows raw Kiro output |
+| `test-semantic-score.ts` | Top 25 semantic score for a tab (no Kiro) |
+| `test-kiro-prompt.ts` | Generates exact prompt → `kiro-prompt-debug.txt` at repo root |
 
----
+### Debug Files (generated at runtime)
 
-## Blaze Repo Structure (Critical Knowledge)
-
-From `blaze-glossary.md` section 2:
-
-| Prefix | Kind | Note |
-|--------|------|------|
-| `rs`   | ruleset | Orchestrator container — NOT individually verifiable |
-| `fcn`  | function | Verifiable |
-| `rule` | rule | Individual rule inside a ruleset — verifiable |
-| `dt`   | decision_table | |
-| `rst`, `grp`, `ct`, `rt` | group_template | NOT individually verifiable |
-
-**Critical:** Blaze rulesets store individual rules as:
-```xml
-<rule managementPropertiesRef='...'>
-  <name>ruleLimoSameStation</name>
-  <body>if (condition) then { action. }</body>
-</rule>
-```
-NOT `<srl:rule>` — no namespace. The indexer uses Strategy 1b to capture this pattern.
+| File | Purpose |
+|------|---------|
+| `~/Documents/RHW-Analysis/kiro-prompt-last.txt` | Last prompt sent to Kiro |
+| `~/Documents/RHW-Analysis/kiro-raw-debug.txt` | Last raw Kiro output |
+| `~/Documents/RHW-Analysis/kiro-parsed-debug.json` | Last parsed Kiro JSON |
+| `kiro-prompt-debug.txt` (repo root) | Output of test-kiro-prompt.ts |
 
 ---
 
 ## Kiro Prompt Structure (`kiro-verify.md`)
 
 ```
-IMPORTANT: Response must be ONLY valid JSON
+Context:
+  - Repo path (Kiro reads bodies from here via grep)
+  - EXCEL_INDEX_PATH (full .index.md path — Kiro reads for cross-tab search)
+  - Excel Workbook Content for selected tab (inline rows)
 
 PART 1 — Forward Check:
-  - excel_name: business statement from Excel
-  - code_name: rule/function found by scoring
-  - body: rule body (truncated to 800 chars)
-  Kiro: verify if code_name implements excel_name
-        If not → SEARCH the repo, find correct rule
-        Return correct_code_name
+  List of rules to verify: name + file path only (NO bodies — Kiro greps them)
+  Kiro: reads body via grep, validates if it implements the statement
+        If not → searches repo, returns correct_code_name
 
 PART 2 — Reverse Check:
-  - list of rules from repo
-  - body: rule body
-  Kiro: search Excel index (provided above) for matching business statement
-  Return business_statement + sheet_name
-  DO NOT search the repo for PART 2
+  List of reverse candidates: name + file path only
+  Kiro: reads body via grep, searches ENTIRE workbook index for matching statement
+  Returns: business_statement + sheet_name
+
+Response: JSON only — {forward: [...], reverse: [...]}
+  forward item: {excel_name, status, correct_code_name, notes}
+  reverse item: {name, business_statement, sheet_name}
 ```
 
-**Known issue:** Kiro sometimes returns `SEARCH_REQUIRED` as `correct_code_name` when it can't find the rule. This is filtered in `applyForwardUpdates`.
+**Kiro settings:** model=claude-haiku-4.5, timeout=300s, MAX 15 items per part
 
 ---
 
-## Session State (in-memory, per backend process)
+## Critical: Load Tabs Before Run Analysis
+
+`session.excelIndexPath` is set during Load Tabs. If you restart the backend and run analysis without Load Tabs first, Kiro won't get the Excel index and PART 1/2 will fail (Excel content missing from prompt).
+
+**Always: Load Tabs → Select Tab → Run Analysis**
+
+---
+
+## Session State
 
 ```typescript
 {
@@ -147,11 +139,25 @@ PART 2 — Reverse Check:
   lastExcelName,
   lastRepoPath,
   lastAnnotatedExcelPath,
-  ruleIndexCache,           // Map<string, RuleEntry> — invalidated when repo changes
-  ruleIndexCacheRepoPath,   // string — used to detect repo change
-  excelIndexPath,           // path to .index.md — generated at Load Tabs
+  ruleIndexCache,           // cached per repo path
+  ruleIndexCacheRepoPath,
+  excelIndexPath,           // set at Load Tabs — REQUIRED for Kiro
 }
 ```
+
+---
+
+## Blaze Repo Structure (Critical)
+
+| Prefix | Kind | Note |
+|--------|------|------|
+| `rs`   | ruleset | Orchestrator — NOT verifiable individually |
+| `fcn`  | function | Verifiable |
+| `rule` | rule | Individual rule inside ruleset — verifiable |
+| `dt`   | decision_table | |
+| `rst`, `grp`, `ct`, `rt` | group_template | NOT verifiable |
+
+Rules inside rulesets use `<rule><name>ruleName</name><body>...</body></rule>` — NO `srl:` namespace.
 
 ---
 
@@ -167,66 +173,40 @@ Tab:    Leg Base Credits
 
 ## What Works ✅
 
-1. **Tab classification** — PROSE_LOGIC, RULE_NAMES, LEGALITY_*, LOOKUP_TABLE, REFERENCE
-2. **Excel indexer** — generates plain-text index at Load Tabs time
-3. **Rule indexer** — captures individual rules inside rulesets (`<rule><name>`) + functions
-4. **Forward check** — semantic scoring per statement → matches rules with MATCH/MISSING status
-5. **Reverse check candidates** — top 25 rules by name-based semantic score, excluding infrastructure/already-matched
-6. **Kiro PART 2** — finds business statements in Excel index for reverse candidates (green/red rows)
-7. **Kiro PART 1** — verifies forward check, corrects wrong matches (e.g. `ruleCalculateLegBaseCreditsForWorkCodeNotEqualToGRorDVorUL` corrected from wrong initial match)
-8. **Session cache** — repo index cached, invalidated on repo change
-9. **SSE streaming** — live progress updates in UI
-10. **HTML report** — 4-column reverse check table with color coding
-11. **UI reverse check table** — collapsible, green rows (found) / red rows (not found)
+1. Tab classification — PROSE_LOGIC, RULE_NAMES, LEGALITY_*, LOOKUP_TABLE, REFERENCE
+2. Excel indexer — generates .index.md at Load Tabs (all non-REFERENCE tabs)
+3. Rule indexer — captures individual rules inside rulesets + functions (2844 rules for test repo)
+4. Forward check — semantic scoring per statement
+5. Reverse check candidates — top 15 by name-based score
+6. Kiro PART 1 — reads bodies from repo via grep, corrects wrong matches
+7. Kiro PART 2 — reads bodies from repo, searches workbook index for statements
+8. Report built from Kiro JSON directly (full excel_name, correct code_name)
+9. Session cache — repo index cached per repo path
+10. SSE streaming — live progress in UI
+11. HTML report — 4-column reverse table with color coding (green/red)
+12. UI reverse table — collapsible, green (found) / red (not documented in this sheet)
+13. Abort on Kiro timeout — no false reports generated
+14. Prompt saved to kiro-prompt-last.txt before each Kiro call
 
 ---
 
-## What's Pending / In Progress 🔧
+## What's Pending 🔧
 
-### 1. Kiro PART 1 — LIMO rule not found
-- Statement: `"If my Leg's isLIMO Flag = TRUE and Arrival Station = Departure Station, then Base Credits = 0"`
-- Current: matched to `ctLegDepartureArrival` (wrong — it's an XML template)
-- Expected: Kiro should find `ruleLimoSameStation` in `rsCalculateLegBaseCredits`
-- Why failing: Kiro says NOT_CONFIRMED but returns `SEARCH_REQUIRED` instead of the correct rule
-- Root cause: rule body sent to Kiro is truncated (800 chars) — may not have enough context
-- Fix needed: possibly increase body limit for PART 1, or improve prompt to give Kiro the file path to read directly
+### 1. Forward check table — no visual Kiro correction indicator
+- When Kiro changes code_name, the table updates but no badge showing "🤖 Kiro corrected"
 
-### 2. Remove debug log from `parseKiroResponse`
-- `kiroVerifier.ts` has `console.log('[KIRO RAW OUTPUT...]')` — remove before production
-
-### 3. UI — forward check table doesn't show Kiro corrections visually
-- When Kiro changes `code_name`, the table updates but there's no visual indicator that Kiro made a correction
-- Nice to have: "🤖 Kiro corrected" badge on updated rows
-
-### 4. Annotated Excel download
-- `session.lastAnnotatedExcelPath` is never set — endpoint returns 404
+### 2. Annotated Excel download
+- `session.lastAnnotatedExcelPath` never set — endpoint returns 404
 - Python reference has `excel_annotator.py` — not yet ported
 
-### 5. `RULE_NAMES` tab support for Kiro verification
-- Currently Kiro verification runs for all tab types but `findUndocumentedByRulesets` uses `extractStatements()` which may return few results for RULE_NAMES tabs
-- Need to verify RULE_NAMES tabs work correctly end-to-end
+### 3. RULE_NAMES tab — end-to-end Kiro verification untested
+- `findUndocumentedByRulesets` uses `extractStatements()` which may return few results for RULE_NAMES tabs
 
-### 6. `runAnalysisPipeline` (non-stream) is outdated
-- The non-stream `/run_analysis` route doesn't use Kiro, doesn't use `findUndocumentedByRulesets`
-- Only the stream route is up to date
+### 4. `runAnalysisPipeline` (non-stream) outdated
+- `/run_analysis` route doesn't use Kiro or `findUndocumentedByRulesets`
 
----
-
-## How to Run Tests
-
-```bash
-cd C:\Users\X322736\Downloads\project3\RHWBlazeMapper\packages\backend
-
-# See top 25 semantic score for a tab
-npx ts-node src/test-semantic-score.ts "<excel>" "<repo>" "<tab>"
-
-# Full pipeline test with Kiro
-npx ts-node src/test-reverse-check.ts "<excel>" "<repo>" "<tab>"
-
-# Inspect exact Kiro prompt
-npx ts-node src/test-kiro-prompt.ts "<excel>" "<repo>" "<tab>"
-# Output: kiro-prompt-debug.txt at repo root
-```
+### 5. Debug logs still in kiroVerifier.ts
+- `kiro-prompt-last.txt`, `kiro-raw-debug.txt`, `kiro-parsed-debug.json` writes — intentionally kept during development
 
 ---
 
@@ -237,7 +217,7 @@ cd C:\Users\X322736\Downloads\project3\RHWBlazeMapper
 npm run dev
 ```
 
-- Frontend: http://localhost:3000
+- Frontend: http://localhost:3000  
 - Backend: http://localhost:3001
 
-After code changes to `blazeIndexer.ts`, `gapAnalyzer.ts`, or `kiroVerifier.ts` — restart backend manually (ts-node-dev may miss deep changes).
+Restart backend after changes to `blazeIndexer.ts`, `gapAnalyzer.ts`, `kiroVerifier.ts`.
